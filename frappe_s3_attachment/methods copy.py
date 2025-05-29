@@ -1,7 +1,6 @@
 # frappe_s3_attachment/methods.py
 
 import os, frappe, shutil
-from frappe import _
 from shutil import SameFileError
 from frappe.core.doctype.file.file import File
 from frappe.utils.file_manager import save_file
@@ -87,47 +86,3 @@ def upload_file_to_folder(doctype, docname, subfolders=None, is_private=0):
     file_doc.db_set('attached_to_name', docname)
 
     return file_doc.as_dict()
-
-@frappe.whitelist()
-def create_folder(doctype, docname, parent, folder_name):
-    """
-    Crea una subcarpeta vacía (File with is_folder=1) bajo la carpeta `parent`.
-    """
-    parent_doc = frappe.get_doc("File", parent)
-    if not parent_doc.is_folder:
-        frappe.throw(_("El registro padre no es una carpeta válida."))
-    # evita duplicados
-    if frappe.db.exists("File", {"file_name": folder_name, "folder": parent}):
-        frappe.throw(_("Ya existe '{0}' en la carpeta.").format(folder_name))
-    # crea la carpeta
-    newf = frappe.get_doc({
-        "doctype": "File",
-        "file_name": folder_name,
-        "is_folder": 1,
-        "folder": parent,
-        "attached_to_doctype": doctype,
-        "attached_to_name": docname
-    }).insert(ignore_permissions=True)
-    return newf.name
-
-@frappe.whitelist()
-def delete_empty_folder(folder_id):
-    """Elimina la carpeta dada si no tiene archivos ni subcarpetas. 
-    Lanza un error si la carpeta no está vacía."""
-    # Obtener el registro File de la carpeta
-    folder_doc = frappe.get_doc("File", folder_id)
-    # Verificar que realmente sea una carpeta
-    if not folder_doc.is_folder:
-        frappe.throw("El elemento seleccionado no es una carpeta.")
-    # Buscar cualquier fichero o subcarpeta cuyo campo "folder" (carpeta padre) sea esta carpeta
-    folder_path = f"{folder_doc.folder}/{folder_doc.file_name}"  # Ruta completa de la carpeta
-    # Obtener cualquier File que tenga como carpeta padre la ruta de esta carpeta
-    children = frappe.get_all("File", filters={"folder": folder_path})
-    if children:
-        # Si encontramos archivos o subcarpetas dentro, no permitimos eliminar
-        frappe.throw("No se puede eliminar la carpeta porque no está vacía.")
-    # Si está vacía, procedemos a eliminar el documento File de la carpeta
-    frappe.delete_doc("File", folder_id, ignore_permissions=True)
-    # (Opcional: también se podría eliminar del sistema de archivos físico si fuera necesario, pero 
-    # Frappe no crea directorios reales para carpetas vacías en adjuntos, solo registros.)
-    return {"message": "Carpeta eliminada exitosamente"}

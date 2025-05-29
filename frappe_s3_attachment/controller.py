@@ -147,6 +147,33 @@ class S3Operations(object):
             params['ResponseContentDisposition'] = f"filename={file_name}"
         return self.S3_CLIENT.generate_presigned_url('get_object', Params=params, ExpiresIn=expiry)
 
+@frappe.whitelist(allow_guest=False)
+def download_file(key=None):
+    if not key:
+        frappe.throw(_("Key not found."), frappe.DoesNotExistError)
+
+    # 1) Locate the File document and verify read permissions
+    file_doc = frappe.get_doc("File", {"content_hash": key})
+    if not file_doc.has_permission("read"):
+        frappe.throw(_("You do not have permission to access this file"), frappe.PermissionError)
+
+    # 2) Read the object from S3 using S3Operations helper
+    s3op = S3Operations()
+    obj = s3op.read_file_from_s3(key)      # {'Body': StreamingBody, 'ContentType': 'application/pdf', ...}
+    stream = obj["Body"]
+
+    # 3) Build the response and force inline display
+    frappe.local.response.update({
+        "filecontent": stream.read(),
+        "filename": file_doc.file_name,
+        "type": "download",
+        # This causes Frappe to send:
+        #   Content-Disposition: inline; filename="your_file.pdf"
+        "display_content_as": "inline"
+    })
+    # Optional: ensure the correct Content-Type header (e.g. application/pdf)
+    frappe.local.response["content_type"] = obj.get("ContentType")
+
 
 @frappe.whitelist()
 def file_upload_to_s3(doc, method):
@@ -202,7 +229,7 @@ def file_upload_to_s3(doc, method):
 
     # Build file URL
     if doc.is_private:
-        url = f"/api/method/frappe_s3_attachment.controller.generate_file?key={key}&file_name={fname}"
+        url = f"/api/method/frappe_s3_attachment.controller.download_file?key={key}"
     else:
         url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
 

@@ -30,6 +30,10 @@ doctype_js = {"File" : "public/js/file.js"}
 doctype_list_js = {
     "S3 Attachment Settings": ["frappe_s3_attachment/doctype/s3_attachment_settings/s3_attachment_settings.js"]
 }
+
+app_include_js = [
+    "/assets/frappe_s3_attachment/js/attachments.js",
+]
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 

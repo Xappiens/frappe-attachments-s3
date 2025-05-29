@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 import frappe
+from .monkey_patches import custom_get_attachments
 
 
 __version__ = "0.0.1"
