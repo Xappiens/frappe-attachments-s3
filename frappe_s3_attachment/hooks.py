@@ -34,6 +34,10 @@ doctype_list_js = {
 app_include_js = [
     "/assets/frappe_s3_attachment/js/attachments.js",
 ]
+app_include_css = [
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css",
+    "/assets/integracion/css/custom_styles.css",
+]
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
