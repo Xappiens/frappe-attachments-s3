@@ -42,7 +42,7 @@ class S3Operations(object):
 
     def strip_special_chars(self, text):
         """Remove characters not allowed in S3 keys (alphanumeric, dot, underscore, hyphen)."""
-        return re.sub(r'[^0-9A-Za-z._-]', '', (text or '').replace(' ', '_'))
+        return re.sub(r'[^0-9A-Za-z._-]', '-', (text or '').replace(' ', '_'))
 
     def _get_folder_hierarchy(self, folder_docname):
         """
