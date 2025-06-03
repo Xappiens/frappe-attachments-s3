@@ -10,23 +10,50 @@ from frappe_s3_attachment.controller import S3Operations
 
 def create_folder_if_not_exists(folder_name, parent_folder=None,
                                 attached_to_doctype=None, attached_to_name=None):
+    """
+    Crea o devuelve una carpeta (File con is_folder=1) cuyo nombre completo en DB es:
+      <parent_folder>/<folder_name>
+    Si ya existe, simplemente devuelve el doc existente en lugar de reinsertarlo.
+    """
     parent = parent_folder or "Home"
-    existing = frappe.get_all('File',
-        filters={'file_name': folder_name, 'is_folder': 1, 'folder': parent},
-        fields=['name'], limit=1)
-    if existing:
-        return frappe.get_doc('File', existing[0].name)
+    # 1) Construimos el "name" que tendría este doc si ya existe:
+    expected_name = f"{parent}/{folder_name}"
 
-    f = frappe.new_doc('File')
-    f.file_name = folder_name
-    f.is_folder = 1
-    f.folder = parent
-    if attached_to_doctype and attached_to_name:
-        f.attached_to_doctype = attached_to_doctype
-        f.attached_to_name = attached_to_name
-    f.insert()
-    frappe.db.commit()
-    return f
+    # 2) Intentamos traerlo directamente por name
+    try:
+        existing_doc = frappe.get_doc("File", expected_name)
+        # Si existe y es carpeta, devolvemos ese doc.
+        if existing_doc.is_folder:
+            return existing_doc
+        # Si por alguna razón existe un File con ese name pero is_folder==0,
+        # quizá convenga eliminarlo o arrojar excepción. Aquí lo convertimos a Folder:
+        existing_doc.is_folder = 1
+        existing_doc.folder = parent
+        if attached_to_doctype and attached_to_name:
+            existing_doc.attached_to_doctype = attached_to_doctype
+            existing_doc.attached_to_name = attached_to_name
+        existing_doc.save(ignore_permissions=True)
+        frappe.db.commit()
+        return existing_doc
+
+    except frappe.DoesNotExistError:
+        # No existe todavía, así que lo creamos:
+        f = frappe.new_doc("File")
+        f.name = expected_name
+        f.file_name = folder_name
+        f.is_folder = 1
+        f.folder = parent
+        if attached_to_doctype and attached_to_name:
+            f.attached_to_doctype = attached_to_doctype
+            f.attached_to_name = attached_to_name
+        try:
+            f.insert(ignore_permissions=True)
+            frappe.db.commit()
+            return f
+        except frappe.DuplicateEntryError:
+            # Raza imposible rara: otro proceso pudo haberlo creado justo antes.
+            # En ese caso, recuperamos y devolvemos el que ya existe:
+            return frappe.get_doc("File", expected_name)
 
 
 def ensure_folder_hierarchy(doctype, docname, subfolders=None):
