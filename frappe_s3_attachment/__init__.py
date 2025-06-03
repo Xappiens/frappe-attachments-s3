@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
+from . import methods
 import frappe
 from .monkey_patches import custom_get_attachments
 

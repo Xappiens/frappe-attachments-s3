@@ -48,6 +48,13 @@ def ensure_folder_hierarchy(doctype, docname, subfolders=None):
         )
     return parent
 
+@frappe.whitelist(allow_guest=False)
+def get_doc_folder(doctype, docname):
+    """
+    Devuelve (creando si hace falta) la carpeta intermedia Home/doctype/docname.
+    """
+    folder = ensure_folder_hierarchy(doctype, docname, subfolders=[])
+    return folder.name
 
 @frappe.whitelist(allow_guest=False)
 def upload_file_to_folder(doctype, docname, subfolders=None, is_private=0):
@@ -93,6 +100,8 @@ def create_folder(doctype, docname, parent, folder_name):
     """
     Crea una subcarpeta vacía (File with is_folder=1) bajo la carpeta `parent`.
     """
+    if not parent or parent in ("null", "None", ""):
+        parent = "Home"
     parent_doc = frappe.get_doc("File", parent)
     if not parent_doc.is_folder:
         frappe.throw(_("El registro padre no es una carpeta válida."))
