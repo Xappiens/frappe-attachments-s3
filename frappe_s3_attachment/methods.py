@@ -5,6 +5,7 @@ from frappe import _
 from shutil import SameFileError
 from frappe.core.doctype.file.file import File
 from frappe.utils.file_manager import save_file
+import re
 from frappe_s3_attachment.controller import S3Operations
 
 def sanitize_folder_name(text):
@@ -20,8 +21,6 @@ def sanitize_folder_name(text):
     if not text:
         return text
 
-    # 1) Pasar a ASCII básico (quita acentos)
-    text = unidecode.unidecode(text)
 
     # 2) Reemplazar espacios por guión bajo (para mantener separación visual)
     text = text.replace(" ", "_")
