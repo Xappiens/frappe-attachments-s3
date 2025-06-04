@@ -6,20 +6,14 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
     make() {
         // Inserta el menú al lado del botón +
         const $addBtn = this.parent.find(".add-attachment-btn");
-
         // Evita duplicados
         if (!$addBtn.siblings('.ellipsis-dropdown-menu.root').length) {
             $addBtn.after(`
-                <ul class="ellipsis-dropdown-menu root"
-                    style="display:none;position:absolute;z-index:1000;
-                           background:#fff;border:1px solid #ccc;
-                           padding:8px 0;min-width:160px;
-                           box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                           margin-top:4px;">
-                    <li><a href="#" class="upload-file">Subir archivo</a></li>
-                    <li><a href="#" class="create-subfolder">Crear carpeta</a></li>
-                </ul>
-            `);
+            <ul class="ellipsis-dropdown-menu root" style="display:none;position:absolute;z-index:1000;background:#fff;border:1px solid #ccc;padding:8px 0;min-width:160px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-top:4px;">
+                <li><a href="#" class="upload-file">Subir archivo</a></li>
+                <li><a href="#" class="create-subfolder">Crear carpeta</a></li>
+            </ul>
+        `);
         }
 
         // Mostrar/ocultar menú al hacer click en +
@@ -39,46 +33,48 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         const me = this;
         this.parent.find('.ellipsis-dropdown-menu.root .upload-file').off('click').on('click', function (e) {
             e.preventDefault(); e.stopPropagation();
-            // Llamamos a prompt_upload sin parent_folder para que asegure Home/doctype/docname
-            me.prompt_upload(null);
+            me.prompt_upload(null); // null para raíz
             $('.ellipsis-dropdown-menu').hide();
         });
-
-        this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder').off('click').on('click', function (e) {
+        /* this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder').off('click').on('click', function (e) {
             e.preventDefault(); e.stopPropagation();
-
-            // 1) Abrimos prompt para pedir nombre de la carpeta
             frappe.prompt(
-                {
-                    fieldtype: 'Data',
-                    fieldname: 'subname',
-                    label: 'Nombre de la nueva carpeta',
-                    reqd: 1
-                },
-                values => {
-                    const subfolder_name = values.subname;
-
-                    // 2) Llamamos a get_doc_folder para crear/recuperar Home/doctype/docname
-                    frappe.call({
-                        method: 'frappe_s3_attachment.methods.get_doc_folder',
-                        args: {
-                            doctype: me.frm.doctype,
-                            docname: me.frm.docname
-                        },
-                        callback: function (r) {
-                            const parent_folder = r.message;
-                            // 3) Crear la subcarpeta dentro de esa carpeta intermedia
-                            me.create_subfolder(parent_folder, subfolder_name);
-                        }
-                    });
-                },
-                'Crear carpeta',
-                'Crear'
+                { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
+                values => me.create_subfolder(null, values.subname),
+                'Crear carpeta vacía', 'Crear'
             );
-
             $('.ellipsis-dropdown-menu').hide();
-        });
-    }
+        }); */
+        this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder').off('click').on('click', function (e) {
+                e.preventDefault(); e.stopPropagation();
+                frappe.prompt(
+                    { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
+                    values => {
+                        // Buscar la carpeta lógica del documento
+                        frappe.call({
+                            method: "frappe.client.get_list",
+                            args: {
+                                doctype: "File",
+                                filters: [
+                                    ["file_name", "=", me.frm.docname],
+                                    ["folder", "=", me.frm.doctype]
+                                ],
+                                fields: ["name"]
+                            },
+                            callback: function(r) {
+                                let parent_folder = "Home";
+                                if (r.message && r.message.length) {
+                                    parent_folder = r.message[0].name;
+                                }
+                                me.create_subfolder(parent_folder, values.subname);
+                            }
+                        });
+                    },
+                    'Crear carpeta vacía', 'Crear'
+                );
+                $('.ellipsis-dropdown-menu').hide();
+            });
+    }           
 
     refresh() {
         // Limpiar contenedor
@@ -86,6 +82,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         this.parent.find('.attachment-row').remove();
         // Obtener adjuntos desde docinfo
         const attachments = this.get_attachments();
+        // console.log('Adjuntos obtenidos:', attachments);
         // Reconstruir árbol
         this.render_tree(attachments);
     }
@@ -93,7 +90,11 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
     render_tree(attachments) {
         // 1) Convertir lista a nodos con children
         const nodes = attachments.map(a => ({ ...a, children: [] }));
+        // console.log("NODES? ", nodes)
+
         const byId = Object.fromEntries(nodes.map(n => [n.name, n]));
+        // console.log("BYID ?", byId)
+
         const roots = [];
         nodes.forEach(n => {
             if (byId[n.folder]) {
@@ -102,6 +103,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 roots.push(n);
             }
         });
+        // console.log("ROOTS?", roots)
 
         // 2) Función recursiva de renderizado
         const renderNode = (node, $container) => {
@@ -116,27 +118,21 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
 
                 const $summary = $details.find('> summary');
                 $summary.append(`
-                    <span class="ellipsis" style="max-width: calc(100% - 40px); display:inline-block;">
-                        ${frappe.ellipsis(node.file_name, 10)}
-                    </span>
-                    <button class="ellipsis-menu-btn btn"
-                        style="background:none;border:none;cursor:pointer;padding:0 8px;vertical-align:middle;">
-                        <svg width="20" height="20" viewBox="0 0 100 20" style="display:inline-block;">
+                        <span class="ellipsis" style="max-width: calc(100% - 40px); display:inline-block;">
+                            ${frappe.ellipsis(node.file_name, 10)}
+                        </span>
+                        <button class="ellipsis-menu-btn btn" style="background:none;border:none;cursor:pointer;padding:0 8px;vertical-align:middle;">
+                            <svg width="20" height="20" viewBox="0 0 100 20" style="display:inline-block;">
                             <circle cx="15" cy="10" r="5" fill="#3c4a56"/>
                             <circle cx="50" cy="10" r="5" fill="#3c4a56"/>
                             <circle cx="85" cy="10" r="5" fill="#3c4a56"/>
-                        </svg>
-                    </button>
-                    <ul class="ellipsis-dropdown-menu"
-                        style="display:none;position:absolute;left:0;z-index:1000;
-                               background:#fff;border:1px solid #ccc;
-                               padding:8px 0;min-width:160px;
-                               box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                               margin-top:4px;">
-                        <li><a href="#" class="upload-file">Subir archivo</a></li>
-                        <li><a href="#" class="create-subfolder">Crear subcarpeta</a></li>
-                        <li><a href="#" class="delete-folder">Eliminar carpeta</a></li>
-                    </ul>
+                            </svg>
+                        </button>
+                        <ul class="ellipsis-dropdown-menu" style="display:none;position:absolute;left:0;z-index:1000;background:#fff;border:1px solid #ccc;padding:8px 0;min-width:160px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-top:4px;">
+                            <li><a href="#" class="upload-file">Subir archivo</a></li>
+                            <li><a href="#" class="create-subfolder">Crear subcarpeta</a></li>
+                            <li><a href="#" class="delete-folder">Eliminar carpeta</a></li>
+                        </ul>
                 `);
 
                 const style = document.createElement('style');
@@ -145,10 +141,12 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                         padding: 6px 18px;
                         margin: 0;
                     }
-                    .ellipsis-dropdown-menu li:not(:last-child) {
+
+                        .ellipsis-dropdown-menu li:not(:last-child) {
                         margin-bottom: 4px;
                     }
-                    .ellipsis-dropdown-menu li a {
+
+                        .ellipsis-dropdown-menu li a {
                         color: #222;
                         text-decoration: none;
                         display: block;
@@ -156,12 +154,14 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                         border-bottom: 2px solid transparent;
                         padding-bottom: 2px;
                     }
-                    .ellipsis-dropdown-menu li a:hover {
+
+                        .ellipsis-dropdown-menu li a:hover {
                         border-bottom: 2px solid #111;
                         background: #f8f8f8;
-                    }
+                    }    
                 `;
                 document.head.appendChild(style);
+
 
                 // Mostrar/ocultar menú al hacer click en los puntos
                 $summary.find('.ellipsis-menu-btn').on('click', function (e) {
@@ -176,7 +176,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                     $('.ellipsis-dropdown-menu').hide();
                 });
 
-                // Acciones dentro de la carpeta
+                // Acciones
                 $summary.find('.upload-file').on('click', e => {
                     e.preventDefault(); e.stopPropagation();
                     me.prompt_upload(node.name);
@@ -187,8 +187,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                     frappe.prompt(
                         { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre subcarpeta', reqd: 1 },
                         values => me.create_subfolder(node.name, values.subname),
-                        'Crear subcarpeta',
-                        'Crear'
+                        'Crear subcarpeta', 'Crear'
                     );
                     $('.ellipsis-dropdown-menu').hide();
                 });
@@ -217,17 +216,16 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
 
                 const file_url = this.get_file_url(node);
                 const file_label = `
-                    <a href="${file_url}" target="_blank"
-                       title="${frappe.utils.escape_html(node.file_name)}"
-                       class="ellipsis" style="max-width: calc(100% - 43px);">
+                    <a href="${file_url}" target="_blank" title="${frappe.utils.escape_html(node.file_name)}"
+                        class="ellipsis" style="max-width: calc(100% - 43px);">
                         <span>${node.file_name}</span>
                     </a>`;
 
-                const icon = `
-                    <a href="/app/file/${node.name}">
-                        ${frappe.utils.icon(node.is_folder ? "folder-normal" : "file", "sm ml-0")}
-                    </a>`;
+                const icon = `<a href="/app/file/${node.name}">
+                  ${frappe.utils.icon(node.is_folder ? "folder-normal" : "file", "sm ml-0")}
+                </a>`;
 
+                // Insertar <li> dentro del contenedor actual
                 $(`<li class="attachment-row">`)
                     .append(frappe.get_data_pill(file_label, node.name, remove_action, icon))
                     .appendTo($container);
@@ -238,7 +236,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         roots.forEach(root => renderNode(root, this.parent));
     }
 
-    // Crear una subcarpeta bajo parent_folder_id
+    // Métodos auxiliares
     create_subfolder(parent_folder_id, subfolder_name) {
         frappe.call({
             method: 'frappe_s3_attachment.methods.create_folder',
@@ -251,58 +249,29 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
             callback: () => this.frm.reload_doc()
         });
     }
-
-    // Obtiene URL de archivo (respecta is_private)
     get_file_url(attachment) {
+        // Si está marcado como privado, usamos nuestro proxy interno
         if (attachment.is_private) {
             return `/api/method/frappe_s3_attachment.controller.download_file?key=${attachment.content_hash}`;
         }
+        // En caso contrario, delegamos al método original
         return super.get_file_url(attachment);
     }
 
-    // Subir archivo: si no hay carpeta padre, la solicita con get_doc_folder
     prompt_upload(parent_folder_id) {
-        const me = this;
-
-        if (!parent_folder_id) {
-            // 1) Obtener/crear Home/doctype/docname
-            frappe.call({
-                method: 'frappe_s3_attachment.methods.get_doc_folder',
-                args: {
-                    doctype: me.frm.doctype,
-                    docname: me.frm.docname
-                },
-                callback: function (r) {
-                    const doc_folder = r.message;
-                    // 2) Abrir FileUploader en esa carpeta
-                    new frappe.ui.FileUploader({
-                        doctype: me.frm.doctype,
-                        docname: me.frm.docname,
-                        folder: doc_folder,
-                        on_success: () => {
-                            me.frm.reload_doc().then(() => {
-                                me.refresh();
-                            });
-                        }
-                    });
-                }
-            });
-        } else {
-            // Si ya tengo carpeta padre (subcarpeta concreta)
-            new frappe.ui.FileUploader({
-                doctype: me.frm.doctype,
-                docname: me.frm.docname,
-                folder: parent_folder_id,
-                on_success: () => {
-                    me.frm.reload_doc().then(() => {
-                        me.refresh();
-                    });
-                }
-            });
-        }
+        const folder = parent_folder_id || "Home";
+        new frappe.ui.FileUploader({
+            doctype: this.frm.doctype,
+            docname: this.frm.docname,
+            folder: folder,
+            on_success: () => {
+                this.frm.reload_doc().then(() => {
+                    this.refresh();
+                });
+            }
+        });
     }
 
-    // Subir archivo usando el endpoint upload_file_to_folder (si lo usases en otro flujo)
     upload_file(dataUrl, filename, parent_folder_id) {
         frappe.call({
             method: 'frappe_s3_attachment.methods.upload_file_to_folder',
@@ -318,7 +287,6 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         });
     }
 
-    // Eliminar carpeta vacía
     delete_folder(folder_id) {
         frappe.call({
             method: 'frappe_s3_attachment.methods.delete_empty_folder',
@@ -333,3 +301,5 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         });
     }
 };
+
+
