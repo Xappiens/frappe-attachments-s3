@@ -99,6 +99,7 @@ app_include_css = [
 
 doc_events = {
     "File": {
+        "before_insert": "frappe_s3_attachment.methods.ensure_file_folder",
         "after_insert": "frappe_s3_attachment.controller.file_upload_to_s3",
         "on_trash": "frappe_s3_attachment.controller.delete_from_cloud"
     }

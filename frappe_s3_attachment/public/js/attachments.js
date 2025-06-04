@@ -46,35 +46,35 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
             $('.ellipsis-dropdown-menu').hide();
         }); */
         this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder').off('click').on('click', function (e) {
-                e.preventDefault(); e.stopPropagation();
-                frappe.prompt(
-                    { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
-                    values => {
-                        // Buscar la carpeta lógica del documento
-                        frappe.call({
-                            method: "frappe.client.get_list",
-                            args: {
-                                doctype: "File",
-                                filters: [
-                                    ["file_name", "=", me.frm.docname],
-                                    ["folder", "=", me.frm.doctype]
-                                ],
-                                fields: ["name"]
-                            },
-                            callback: function(r) {
-                                let parent_folder = "Home";
-                                if (r.message && r.message.length) {
-                                    parent_folder = r.message[0].name;
-                                }
-                                me.create_subfolder(parent_folder, values.subname);
+            e.preventDefault(); e.stopPropagation();
+            frappe.prompt(
+                { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
+                values => {
+                    // Buscar la carpeta lógica del documento
+                    frappe.call({
+                        method: "frappe.client.get_list",
+                        args: {
+                            doctype: "File",
+                            filters: [
+                                ["file_name", "=", me.frm.docname],
+                                ["folder", "=", me.frm.doctype]
+                            ],
+                            fields: ["name"]
+                        },
+                        callback: function (r) {
+                            let parent_folder = "Home";
+                            if (r.message && r.message.length) {
+                                parent_folder = r.message[0].name;
                             }
-                        });
-                    },
-                    'Crear carpeta vacía', 'Crear'
-                );
-                $('.ellipsis-dropdown-menu').hide();
-            });
-    }           
+                            me.create_subfolder(parent_folder, values.subname);
+                        }
+                    });
+                },
+                'Crear carpeta vacía', 'Crear'
+            );
+            $('.ellipsis-dropdown-menu').hide();
+        });
+    }
 
     refresh() {
         // Limpiar contenedor
@@ -142,11 +142,15 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                         margin: 0;
                     }
 
-                        .ellipsis-dropdown-menu li:not(:last-child) {
+                    .ellipsis-dropdown-menu li:not(:last-child) {
                         margin-bottom: 4px;
                     }
+                    
+                    .ellipsis-dropdown-menu ul{
+                        list-style: none;
+                    }
 
-                        .ellipsis-dropdown-menu li a {
+                    .ellipsis-dropdown-menu li a {
                         color: #222;
                         text-decoration: none;
                         display: block;
@@ -155,7 +159,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                         padding-bottom: 2px;
                     }
 
-                        .ellipsis-dropdown-menu li a:hover {
+                    .ellipsis-dropdown-menu li a:hover {
                         border-bottom: 2px solid #111;
                         background: #f8f8f8;
                     }    

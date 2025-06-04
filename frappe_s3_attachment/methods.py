@@ -31,6 +31,72 @@ def sanitize_folder_name(text):
 
     return text
 
+@frappe.whitelist()
+def ensure_file_folder(doc, method):
+    """
+    Hook before_save de File:
+      1) Si es carpeta virtual (is_folder=True), no hace nada.
+      2) Si no tiene attached_to_doctype/attached_to_name, tampoco crea nada.
+      3) Siempre obtiene (o crea) la carpeta intermedia Home/Doctype/DocName.
+      4) Si doc.folder viene con un ID distinto de ''/None/'Home':
+           - Comprueba si esa carpeta está dentro de la jerarquía Home/Doctype/DocName.
+           - Si está dentro, la respeta (no la sobrescribe).
+           - Si NO está dentro, se lo asigna a la carpeta intermedia.
+      5) Si doc.folder está vacío/None/"Home", se lo asigna directamente a la carpeta intermedia.
+    """
+    # (1) Si es una "carpeta virtual", salir sin tocar nada
+    if getattr(doc, "is_folder", False):
+        return
+
+    # (2) Si no hay documento padre claro (sin attached_to_doctype/docname), salimos
+    doctype = getattr(doc, "attached_to_doctype", None)
+    docname = getattr(doc, "attached_to_name", None)
+    if not doctype or not docname:
+        return
+
+    # (3) Creamos u obtenemos la carpeta intermedia "Home/Doctype/docname"
+    parent_folder = ensure_folder_hierarchy(doctype, docname, subfolders=[])
+    parent_id = parent_folder.name  # ID de "Home/Doctype/docname"
+
+    # (4) Revisamos si doc.folder viene con algo distinto de ''/None/'Home'
+    folder_id = getattr(doc, "folder", None) or None
+
+    if folder_id and folder_id not in ("", "Home"):
+        # Intentamos cargar ese folder_id
+        try:
+            current = frappe.get_doc("File", folder_id)
+        except frappe.DoesNotExistError:
+            # Si no existe, forzamos abajo la carpeta intermedia
+            current = None
+
+        # Si current existe y es carpeta, comprobamos que esté bajo parent_id
+        if current and current.is_folder:
+            temp = current
+            while temp:
+                # Si encontramos parent_id en la cadena de padres, respetamos folder_id
+                if temp.name == parent_id:
+                    return
+
+                # Si llegamos a "Home" (o a un nodo sin padre válido), cortamos el bucle
+                if not temp.folder or temp.folder == "Home":
+                    break
+
+                try:
+                    temp = frappe.get_doc("File", temp.folder)
+                except frappe.DoesNotExistError:
+                    temp = None
+                    break
+
+        # Si llegamos aquí, quiere decir que:
+        # - O bien folder_id no existía,
+        # - O bien current.is_folder=False (no es carpeta),
+        # - O bien NO estaba bajo parent_id
+        # Por tanto, lo “cerramos” y pasamos a asignar la carpeta intermedia.
+    
+    # (5) Por defecto (folder vacío/"Home"/no válido o fuera de jerarquía),
+    #     asignamos doc.folder = ID de la carpeta intermedia.
+    doc.folder = parent_id
+
 def create_folder_if_not_exists(folder_name, parent_folder=None,
                                 attached_to_doctype=None, attached_to_name=None):
     parent = parent_folder or "Home"
