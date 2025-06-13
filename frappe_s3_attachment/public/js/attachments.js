@@ -51,6 +51,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
                 values => {
                     // Buscar la carpeta lógica del documento
+
                     frappe.call({
                         method: "frappe.client.get_list",
                         args: {
@@ -162,7 +163,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                     .ellipsis-dropdown-menu li a:hover {
                         border-bottom: 2px solid #111;
                         background: #f8f8f8;
-                    }    
+                    }
                 `;
                 document.head.appendChild(style);
 
@@ -220,9 +221,8 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
 
                 const file_url = this.get_file_url(node);
                 const file_label = `
-                    <a href="${file_url}" target="_blank" title="${frappe.utils.escape_html(node.file_name)}"
-                        class="ellipsis" style="max-width: calc(100% - 43px);">
-                        <span>${node.file_name}</span>
+                    <a href="${file_url}" target="_blank" title="${frappe.utils.escape_html(node.file_name)}">
+                        <span>${frappe.ellipsis(node.file_name, 10)}</span>
                     </a>`;
 
                 const icon = `<a href="/app/file/${node.name}">
