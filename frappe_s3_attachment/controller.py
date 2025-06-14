@@ -35,7 +35,7 @@ class S3Operations(object):
             client_args['aws_secret_access_key'] = cfg.aws_secret
 
         self.S3_CLIENT = boto3.client(**client_args)
-        frappe.log_error(f"[S3Operations] boto3 client endpoint: {self.S3_CLIENT.meta.endpoint_url}")
+        # frappe.log_error(f"[S3Operations] boto3 client endpoint: {self.S3_CLIENT.meta.endpoint_url}")
 
         self.BUCKET = cfg.bucket_name
         self.folder_name = cfg.folder_name
@@ -277,6 +277,13 @@ def upload_existing_files_s3(name, file_name):
     relative = doc.file_url.lstrip('/')
     local = os.path.join(site_path, relative)
 
+    if not os.path.exists(local):
+        frappe.log_error(
+            title="Archivo no encontrado para migración a S3",
+            message=f"No se encontró el archivo en el path local: {local} (File name: {name})"
+        )
+        return  # Salta este archivo y continúa
+
     # Determine context
     if doc.attached_to_doctype == 'File':
         try:
@@ -294,28 +301,34 @@ def upload_existing_files_s3(name, file_name):
         parent_doctype = doc.attached_to_doctype
         parent_name = doc.attached_to_name
 
-    key, fname = s3op.upload_files_to_s3_with_key(
-        local, doc.file_name, doc.is_private,
-        parent_doctype, parent_name, doc.folder
-    )
-
-    if doc.is_private:
-        url = f"/api/method/frappe_s3_attachment.controller.generate_file?key={key}"
-    else:
-        url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
-
-    frappe.db.set_value('File', doc.name, {
-        'file_url': url,
-        'folder': doc.folder,
-        'old_parent': doc.folder,
-        'content_hash': key
-    })
-    frappe.db.commit()
-
     try:
-        os.remove(local)
-    except OSError:
-        pass
+        key, fname = s3op.upload_files_to_s3_with_key(
+            local, doc.file_name, doc.is_private,
+            parent_doctype, parent_name, doc.folder
+        )
+
+        if doc.is_private:
+            url = f"/api/method/frappe_s3_attachment.controller.generate_file?key={key}"
+        else:
+            url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
+
+        frappe.db.set_value('File', doc.name, {
+            'file_url': url,
+            'folder': doc.folder,
+            'old_parent': doc.folder,
+            'content_hash': key
+        })
+        frappe.db.commit()
+
+        try:
+            os.remove(local)
+        except OSError:
+            pass
+    except Exception as e:
+        frappe.log_error(
+            title="Error al migrar archivo a S3",
+            message=f"Archivo: {name} | Error: {frappe.get_traceback()}"
+        )
 
 
 def s3_file_regex_match(file_url):

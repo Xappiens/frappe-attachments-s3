@@ -285,7 +285,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 parent: parent_folder_id,
                 filename: filename,
                 filedata: dataUrl,
-                is_private: 0
+                is_private: 1
             },
             callback: () => this.frm.reload_doc()
         });
