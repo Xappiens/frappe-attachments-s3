@@ -1,5 +1,6 @@
 # frappe_s3_attachment/methods.py
 
+from email import message
 import os, frappe, shutil
 from frappe import _
 from shutil import SameFileError

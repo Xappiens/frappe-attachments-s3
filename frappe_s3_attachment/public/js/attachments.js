@@ -45,36 +45,54 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
             );
             $('.ellipsis-dropdown-menu').hide();
         }); */
-        this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder').off('click').on('click', function (e) {
-            e.preventDefault(); e.stopPropagation();
-            frappe.prompt(
-                { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
-                values => {
-                    // Buscar la carpeta lógica del documento
+        this.parent.find('.ellipsis-dropdown-menu.root .create-subfolder')
+            .off('click')
+            .on('click', function (e) {
+                e.preventDefault(); e.stopPropagation();
+                frappe.prompt(
+                    { fieldtype: 'Data', fieldname: 'subname', label: 'Nombre de la nueva carpeta', reqd: 1 },
+                    values => {
+                        // Aquí ya solo llamas a get_doc_folder si parent_folder es Home
+                        // 1) Obtén la carpeta lógica del documento
+                        frappe.call({
+                            method: "frappe.client.get_list",
+                            args: {
+                                doctype: "File",
+                                filters: [
+                                    ["file_name", "=", me.frm.docname],
+                                    ["folder", "=", me.frm.doctype]
+                                ],
+                                fields: ["name"]
+                            },
+                            callback: r => {
+                                let parent_folder = (r.message && r.message.length)
+                                    ? r.message[0].name
+                                    : "Home";
 
-                    frappe.call({
-                        method: "frappe.client.get_list",
-                        args: {
-                            doctype: "File",
-                            filters: [
-                                ["file_name", "=", me.frm.docname],
-                                ["folder", "=", me.frm.doctype]
-                            ],
-                            fields: ["name"]
-                        },
-                        callback: function (r) {
-                            let parent_folder = "Home";
-                            if (r.message && r.message.length) {
-                                parent_folder = r.message[0].name;
+                                // 2) Si parent_folder sigue siendo "Home", pide tu get_doc_folder
+                                if (parent_folder === "Home") {
+                                    frappe.call({
+                                        method: 'frappe_s3_attachment.methods.get_doc_folder',
+                                        args: {
+                                            doctype: me.frm.doctype,
+                                            docname: me.frm.docname
+                                        },
+                                        callback: resp => {
+                                            // resp.message es el File.name de Home/Doctype/DocName
+                                            me.create_subfolder(resp.message, values.subname);
+                                        }
+                                    });
+                                } else {
+                                    // Ya tenemos la carpeta de nivel 1 o superior
+                                    me.create_subfolder(parent_folder, values.subname);
+                                }
                             }
-                            me.create_subfolder(parent_folder, values.subname);
-                        }
-                    });
-                },
-                'Crear carpeta vacía', 'Crear'
-            );
-            $('.ellipsis-dropdown-menu').hide();
-        });
+                        });
+                    },
+                    'Crear carpeta vacía', 'Crear'
+                );
+                $('.ellipsis-dropdown-menu').hide();
+            });
     }
 
     refresh() {
@@ -242,6 +260,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
 
     // Métodos auxiliares
     create_subfolder(parent_folder_id, subfolder_name) {
+        console.log("Creating subfolder:", subfolder_name, "in parent folder:", parent_folder_id);
         frappe.call({
             method: 'frappe_s3_attachment.methods.create_folder',
             args: {
@@ -262,7 +281,9 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         return super.get_file_url(attachment);
     }
 
+
     prompt_upload(parent_folder_id) {
+        //console.log("PARENT FOLDER ID: ", parent_folder_id);
         const folder = parent_folder_id || "Home";
         new frappe.ui.FileUploader({
             doctype: this.frm.doctype,
@@ -276,7 +297,9 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
         });
     }
 
+
     upload_file(dataUrl, filename, parent_folder_id) {
+        //console.log("Uploading file:", filename, "to folder:", parent_folder_id);
         frappe.call({
             method: 'frappe_s3_attachment.methods.upload_file_to_folder',
             args: {

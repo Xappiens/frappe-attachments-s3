@@ -7,6 +7,7 @@ import re
 import random
 import string
 import datetime
+from frappe.utils import get_url
 
 import boto3
 import magic
@@ -194,7 +195,8 @@ def file_upload_to_s3(doc, method):
         local_path = os.path.join(site_path, 'public', doc.file_url.lstrip('/'))
     else:
         return
-
+    if doc.attached_to_doctype == "Prepared Report":
+        return
     # Determine parent context
     if doc.attached_to_doctype == 'File' and doc.attached_to_name:
         fld = frappe.get_doc('File', doc.attached_to_name)
@@ -216,7 +218,6 @@ def file_upload_to_s3(doc, method):
             f = frappe.get_doc('File', folder_docname)
             if f.is_folder and f.file_name == 'Attachments':
                 folder_docname = None
-
     # Upload file to S3
     key, fname = s3op.upload_files_to_s3_with_key(
         local_path,
