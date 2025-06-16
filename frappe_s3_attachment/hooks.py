@@ -101,7 +101,6 @@ doc_events = {
     "File": {
         "before_insert": "frappe_s3_attachment.methods.ensure_file_folder",
         "after_insert": "frappe_s3_attachment.controller.file_upload_to_s3",
-        "after_insert": "frappe_s3_attachment.controller.relocate_amended_file",
         "on_trash": "frappe_s3_attachment.controller.delete_from_cloud"
     }
 }

@@ -14,7 +14,8 @@ import magic
 import frappe
 from botocore.exceptions import ClientError
 from frappe import _
-from frappe.utils import get_url
+from frappe.utils import get_url, get_site_path
+import mimetypes
 
 
 class S3Operations(object):
@@ -153,10 +154,20 @@ def download_file(key=None):
     if not key:
         frappe.throw(_("Key not found."), frappe.DoesNotExistError)
 
-    # 1) Locate the File document and verify read permissions
+    # 1) Carga el documento File a partir del content_hash (key)
     file_doc = frappe.get_doc("File", {"content_hash": key})
     if not file_doc.has_permission("read"):
         frappe.throw(_("You do not have permission to access this file"), frappe.PermissionError)
+
+    # 2) Si el file_url es local (no empieza por http) o no existe content_hash
+    #    redirigimos a la URL interna (/files o /private/files) para que Frappe lo sirva.
+    local_url = file_doc.file_url or ""
+    if local_url.startswith("/files") or local_url.startswith("/private/files"):
+        frappe.local.response.update({
+            "type": "redirect",
+            "location": local_url
+        })
+        return
 
     # 2) Read the object from S3 using S3Operations helper
     s3op = S3Operations()
@@ -188,11 +199,6 @@ def file_upload_to_s3(doc, method):
     s3op = S3Operations()
     site_path = frappe.utils.get_site_path()
 
-    # Determine local path
-    if doc.file_url and (doc.file_url.startswith("http://") or doc.file_url.startswith("https://")):
-        return
-    if doc.file_url and doc.file_url.startswith('/api/method/frappe_s3_attachment'):
-        return  # Already uploaded to S3
     if doc.is_private and doc.file_url:
         local_path = os.path.join(site_path, doc.file_url.lstrip('/'))
     elif doc.file_url:
@@ -201,6 +207,15 @@ def file_upload_to_s3(doc, method):
         return
     if doc.attached_to_doctype == "Prepared Report":
         return
+        # Cargamos el doc padre
+    try:
+        parent = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
+    except frappe.DoesNotExistError:
+        parent = None
+
+    # Si NO es una corrección, nada que hacer
+    if parent and getattr(parent, "amended_from", None):
+        relocate_amended_file(doc, method)
 
     # Determine parent context
     if doc.attached_to_doctype == 'File' and doc.attached_to_name:
@@ -379,15 +394,6 @@ def relocate_amended_file(doc, method):
     if not (doc.attached_to_doctype and doc.attached_to_name):
         return
 
-    # Cargamos el doc padre
-    try:
-        parent = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
-    except frappe.DoesNotExistError:
-        return
-
-    # Si NO es una corrección, nada que hacer
-    if not getattr(parent, "amended_from", None):
-        return
     from frappe_s3_attachment.methods import ensure_folder_hierarchy
     # 1) Obtener (o crear) Home/Doctype/<parent.name>
     target_folder = ensure_folder_hierarchy(parent.doctype, parent.name)
