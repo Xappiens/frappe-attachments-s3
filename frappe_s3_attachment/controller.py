@@ -189,6 +189,10 @@ def file_upload_to_s3(doc, method):
     site_path = frappe.utils.get_site_path()
 
     # Determine local path
+    if doc.file_url and (doc.file_url.startswith("http://") or doc.file_url.startswith("https://")):
+        return
+    if doc.file_url and doc.file_url.startswith('/api/method/frappe_s3_attachment'):
+        return  # Already uploaded to S3
     if doc.is_private and doc.file_url:
         local_path = os.path.join(site_path, doc.file_url.lstrip('/'))
     elif doc.file_url:
@@ -197,6 +201,7 @@ def file_upload_to_s3(doc, method):
         return
     if doc.attached_to_doctype == "Prepared Report":
         return
+
     # Determine parent context
     if doc.attached_to_doctype == 'File' and doc.attached_to_name:
         fld = frappe.get_doc('File', doc.attached_to_name)
@@ -230,8 +235,10 @@ def file_upload_to_s3(doc, method):
 
     # Build file URL
     if doc.is_private:
-        url = f"/api/method/frappe_s3_attachment.controller.download_file?key={key}"
+        # get_url() se encarga de prefijar el dominio y esquema
+        url = get_url(f"/api/method/frappe_s3_attachment.controller.download_file?key={key}")
     else:
+        # ya es una URL absoluta a S3, así que no hace falta get_url
         url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
 
     # Update File record
@@ -354,12 +361,54 @@ def delete_from_cloud(doc, method):
         return
     key = getattr(doc, 'content_hash', None)
     if not key:
-        frappe.log("delete_from_cloud: no content_hash, skipping", "frappe_s3_attachment")
+        #frappe.log("delete_from_cloud: no content_hash, skipping", "frappe_s3_attachment")
         return
     S3Operations().delete_from_s3(key)
+
+
+
+
+
+def relocate_amended_file(doc, method):
+    """
+    Si este File se acaba de copiar desde un 'amended_from',
+    lo movemos a Home/Doctype/<new_name> y apuntamos
+    attached_to_doctype/name al documento corregido.
+    """
+    # Sólo nos interesa archivos ligados a un doctype/version
+    if not (doc.attached_to_doctype and doc.attached_to_name):
+        return
+
+    # Cargamos el doc padre
+    try:
+        parent = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
+    except frappe.DoesNotExistError:
+        return
+
+    # Si NO es una corrección, nada que hacer
+    if not getattr(parent, "amended_from", None):
+        return
+    from frappe_s3_attachment.methods import ensure_folder_hierarchy
+    # 1) Obtener (o crear) Home/Doctype/<parent.name>
+    target_folder = ensure_folder_hierarchy(parent.doctype, parent.name)
+
+    # 2) Si el archivo no está ahí ya, movemos folder y attached_to_*
+    if doc.folder != target_folder.name or \
+       doc.attached_to_doctype != parent.doctype or \
+       doc.attached_to_name != parent.name:
+
+        frappe.db.set_value("File", doc.name, {
+            "folder": target_folder.name,
+            "old_parent": target_folder.name,
+            "attached_to_doctype": parent.doctype,
+            "attached_to_name": parent.name
+        })
+        frappe.db.commit()
 
 
 @frappe.whitelist()
 def ping():
     """Healthcheck."""
     return 'pong'
+
+
