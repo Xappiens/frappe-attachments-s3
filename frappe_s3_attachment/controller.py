@@ -187,17 +187,56 @@ def download_file(key=None):
     frappe.local.response["content_type"] = obj.get("ContentType")
 
 
-@frappe.whitelist()
+@frappe.whitelist(allow_guest=False)
 def file_upload_to_s3(doc, method):
     """
     Hook: upload a File doctype attachment to S3.
-    Skips folders and ignores the default "Attachments" folder.
+    Si es una corrección (amended_from), reubica el adjunto en la carpeta
+    correspondiente y reutiliza el objeto S3 sin volver a subirlo.
     """
     if getattr(doc, 'is_folder', False):
         return
+    if doc.attached_to_doctype == "Prepared Report":
+        return
+    # # ——— Detectamos corrección ———
+    # parent_doctype = doc.attached_to_doctype
+    # parent_name = doc.attached_to_name
+    # if parent_doctype and parent_name:
+    #     frappe.log_error(f"File Upload to S3: {parent_doctype} / {parent_name}", "File Upload to S3")
+    #     parent = frappe.get_doc(parent_doctype, parent_name)
+    #     if getattr(parent, "amended_from", None):
+    #         # 1) Buscamos el File original en el documento previo
+    #         frappe.log_error(parent.amended_from, "File Upload to S3")
+    #         orig = frappe.get_all("File",
+    #             filters={
+    #                 "attached_to_doctype": parent_doctype,
+    #                 "attached_to_name": parent.amended_from,
+    #                 "file_name": doc.file_name
+    #             },
+    #             fields=["file_url", "content_hash"],
+    #             limit=1
+    #         )
+    #         if orig:
+    #             orig = orig[0]
+    #             # 2) Creamos (si no existe) la carpeta Home/Doctype/<new_name>
+    #             from frappe_s3_attachment.methods import ensure_folder_hierarchy
+    #             target = ensure_folder_hierarchy(parent_doctype, parent_name)
+    #             # 3) Reparenting: actualizamos en base de datos
+    #             frappe.db.set_value("File", doc.name, {
+    #                 "file_url":     orig.file_url,
+    #                 "content_hash": orig.content_hash,
+    #                 "folder":       target.name,
+    #                 "old_parent":   target.name,
+    #                 "attached_to_doctype": parent_doctype,
+    #                 "attached_to_name":    parent_name
+    #             })
+    #             frappe.db.commit()
+    #             return
+    # # ——— Fin lógica corrección ———
 
-    s3op = S3Operations()
-    site_path = frappe.utils.get_site_path()
+    # A partir de aquí, tu “normal” a S3:
+    s3op     = S3Operations()
+    site_path= frappe.utils.get_site_path()
 
     if doc.is_private and doc.file_url:
         local_path = os.path.join(site_path, doc.file_url.lstrip('/'))
@@ -205,19 +244,9 @@ def file_upload_to_s3(doc, method):
         local_path = os.path.join(site_path, 'public', doc.file_url.lstrip('/'))
     else:
         return
-    if doc.attached_to_doctype == "Prepared Report":
-        return
-        # Cargamos el doc padre
-    try:
-        parent = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
-    except frappe.DoesNotExistError:
-        parent = None
 
-    # Si NO es una corrección, nada que hacer
-    if parent and getattr(parent, "amended_from", None):
-        relocate_amended_file(doc, method)
 
-    # Determine parent context
+    # Determinar contexto padre
     if doc.attached_to_doctype == 'File' and doc.attached_to_name:
         fld = frappe.get_doc('File', doc.attached_to_name)
         if fld.is_folder:
@@ -230,15 +259,15 @@ def file_upload_to_s3(doc, method):
             folder_docname = doc.folder
     else:
         parent_doctype = doc.attached_to_doctype or doc.doctype
-        parent_name = doc.attached_to_name or doc.name
+        parent_name    = doc.attached_to_name  or doc.name
         folder_docname = doc.folder
-
-        # Ignore the default "Attachments" folder
+        # Ignorar carpeta “Attachments” por defecto
         if folder_docname:
             f = frappe.get_doc('File', folder_docname)
             if f.is_folder and f.file_name == 'Attachments':
                 folder_docname = None
-    # Upload file to S3
+
+    # Subida a S3
     key, fname = s3op.upload_files_to_s3_with_key(
         local_path,
         doc.file_name,
@@ -248,15 +277,12 @@ def file_upload_to_s3(doc, method):
         folder_docname=folder_docname
     )
 
-    # Build file URL
+    # Construir URL
     if doc.is_private:
-        # get_url() se encarga de prefijar el dominio y esquema
         url = get_url(f"/api/method/frappe_s3_attachment.controller.download_file?key={key}")
     else:
-        # ya es una URL absoluta a S3, así que no hace falta get_url
         url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
 
-    # Update File record
     frappe.db.sql("""
         UPDATE `tabFile`
         SET file_url=%s, folder=%s, old_parent=%s, content_hash=%s
@@ -264,13 +290,14 @@ def file_upload_to_s3(doc, method):
     """, (url, doc.folder, doc.folder, key, doc.name))
     frappe.db.commit()
 
-    # Remove local copy and reload
+    # Limpiar copia local y recargar
     try:
         os.remove(local_path)
     except OSError:
         pass
 
     doc.reload()
+
 
 
 
@@ -394,6 +421,15 @@ def relocate_amended_file(doc, method):
     if not (doc.attached_to_doctype and doc.attached_to_name):
         return
 
+    # Cargamos el doc padre
+    try:
+        parent = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
+    except frappe.DoesNotExistError:
+        return
+
+    # Si NO es una corrección, nada que hacer
+    if not getattr(parent, "amended_from", None):
+        return
     from frappe_s3_attachment.methods import ensure_folder_hierarchy
     # 1) Obtener (o crear) Home/Doctype/<parent.name>
     target_folder = ensure_folder_hierarchy(parent.doctype, parent.name)
