@@ -20,14 +20,16 @@ import mimetypes
 
 class S3Operations(object):
     def __init__(self):
+        # Load your S3 Attachment settings
         cfg = frappe.get_doc('S3 File Attachment', 'S3 File Attachment')
         self.cfg = cfg
 
-        # Determine endpoint
+        # Normalize the endpoint URL so it never ends with a slash
         endpoint_url = (cfg.endpoint_url or '').strip()
         default_url = f"https://s3.{cfg.region_name}.amazonaws.com"
-        endpoint = endpoint_url if endpoint_url else default_url
+        endpoint = (endpoint_url or default_url).rstrip('/')
 
+        # Build the boto3 client arguments
         client_args = {
             'service_name': 's3',
             'endpoint_url': endpoint
@@ -36,9 +38,11 @@ class S3Operations(object):
             client_args['aws_access_key_id'] = cfg.aws_key
             client_args['aws_secret_access_key'] = cfg.aws_secret
 
+        # Instantiate the S3 client
         self.S3_CLIENT = boto3.client(**client_args)
-        # frappe.log_error(f"[S3Operations] boto3 client endpoint: {self.S3_CLIENT.meta.endpoint_url}")
+        # frappe.log_error(f"[S3Operations] Using endpoint: {self.S3_CLIENT.meta.endpoint_url}")
 
+        # Store bucket and (optional) root folder name
         self.BUCKET = cfg.bucket_name
         self.folder_name = cfg.folder_name
 
@@ -278,10 +282,15 @@ def file_upload_to_s3(doc, method):
     )
 
     # Construir URL
-    if doc.is_private:
-        url = get_url(f"/api/method/frappe_s3_attachment.controller.download_file?key={key}")
+    if not doc.is_private:
+        # virtual-host style
+        endpoint = s3op.S3_CLIENT.meta.endpoint_url.rstrip('/')
+        # quitamos el esquema, nos quedamos con "s3.de.io.cloud.ovh.net"
+        host = endpoint.split('://', 1)[1]
+        url = f"https://{s3op.BUCKET}.{host}/{key}"
     else:
-        url = f"{s3op.S3_CLIENT.meta.endpoint_url}/{s3op.BUCKET}/{key}"
+        # privado, seguimos usando nuestro endpoint firmado
+        url = get_url(f"/api/method/frappe_s3_attachment.controller.download_file?key={key}")
 
     frappe.db.sql("""
         UPDATE `tabFile`
