@@ -46,7 +46,8 @@ class Importer_new:
 			file_path or data_import.google_sheets_url or data_import.import_file,
 			self.template_options,
 			self.import_type,
-			data_import.name
+			data_import.name,
+			console=self.console,
 		)
 
 	def get_data_for_import_preview(self):
@@ -312,8 +313,9 @@ class Importer_new:
 
 
 class ImportFile_new:
-	def __init__(self, doctype, file, template_options=None, import_type=None,import_id=None):
+	def __init__(self, doctype, file, template_options=None, import_type=None,import_id=None, console=False):
 		self.doctype = doctype
+		self.console = console
 		self.template_options = template_options or frappe._dict(
 			column_to_field_map=frappe._dict()
 		)
