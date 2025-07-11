@@ -21,7 +21,7 @@ def sanitize_folder_name(text):
     """
     if not text:
         return text
-
+    text = str(text)
 
     # 2) Reemplazar espacios por guión bajo (para mantener separación visual)
     text = text.replace(" ", "_")
@@ -97,7 +97,7 @@ def ensure_file_folder(doc, method):
     # (5) Por defecto (folder vacío/"Home"/no válido o fuera de jerarquía),
     #     asignamos doc.folder = ID de la carpeta intermedia.
     doc.folder = parent_id
-
+from frappe.exceptions import DuplicateEntryError
 def create_folder_if_not_exists(folder_name, parent_folder=None,
                                 attached_to_doctype=None, attached_to_name=None):
     parent = parent_folder or "Home"
@@ -115,9 +115,15 @@ def create_folder_if_not_exists(folder_name, parent_folder=None,
     if attached_to_doctype and attached_to_name:
         f.attached_to_doctype = attached_to_doctype
         f.attached_to_name = attached_to_name
-    f.insert()
-    frappe.db.commit()
-    return f
+    try:
+        f.insert()
+        frappe.db.commit()
+        return f
+    except DuplicateEntryError:
+        frappe.db.rollback()
+        # Ya existe, lo recuperamos
+        return frappe.get_doc('File',
+            {'file_name': sanitanized_name, 'is_folder': 1, 'folder': parent})
 
 
 def ensure_folder_hierarchy(doctype, docname, subfolders=None):

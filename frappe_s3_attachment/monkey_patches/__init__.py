@@ -1,3 +1,5 @@
 import frappe_s3_attachment.monkey_patches.importer
 import frappe_s3_attachment.monkey_patches.custom_get_attachments
 import frappe_s3_attachment.monkey_patches.custom_copy_attachments
+import frappe_s3_attachment.monkey_patches.patch_get_content
+import frappe_s3_attachment.monkey_patches.validate_file_on_disk

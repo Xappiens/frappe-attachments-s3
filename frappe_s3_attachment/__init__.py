@@ -2,7 +2,7 @@
 from __future__ import unicode_literals
 from . import methods
 import frappe
-from .monkey_patches import custom_get_attachments, custom_copy_attachments, patch_get_content
+from .monkey_patches import custom_get_attachments, custom_copy_attachments, patch_get_content, validate_file_on_disk
 
 
 __version__ = "0.0.1"

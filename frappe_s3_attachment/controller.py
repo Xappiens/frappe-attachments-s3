@@ -4,8 +4,10 @@ from __future__ import unicode_literals
 
 import os
 import re
+import io
 import random
 import string
+import time
 import datetime
 from frappe.utils import get_url
 
@@ -16,6 +18,7 @@ from botocore.exceptions import ClientError
 from frappe import _
 from frappe.utils import get_url, get_site_path
 import mimetypes
+from frappe.exceptions import DoesNotExistError, PermissionError
 
 
 class S3Operations(object):
@@ -154,17 +157,31 @@ class S3Operations(object):
         return self.S3_CLIENT.generate_presigned_url('get_object', Params=params, ExpiresIn=expiry)
 
 @frappe.whitelist(allow_guest=False)
-def download_file(key=None):
-    if not key:
-        frappe.throw(_("Key not found."), frappe.DoesNotExistError)
+def download_file(key=None, fid=None):
+        # 0) Si traen key mal formado con '?fid=', lo decodificamos:
+    if key and not fid and '?fid=' in key:
+        key_part, fid_part = key.split('?fid=', 1)
+        key, fid = key_part, fid_part
 
-    # 1) Carga el documento File a partir del content_hash (key)
-    file_doc = frappe.get_doc("File", {"content_hash": key})
-    if not file_doc.has_permission("read"):
-        frappe.throw(_("You do not have permission to access this file"), frappe.PermissionError)
+    if fid:
+        # se vino mal el key por el doble '?', uso el fid real
+        file_doc = frappe.get_doc("File", fid)
+    else:
+        if not key:
+            frappe.throw(_("Key not found."), frappe.DoesNotExistError)
+        file_doc = frappe.get_doc("File", {"content_hash": key})
 
-    # 2) Si el file_url es local (no empieza por http) o no existe content_hash
-    #    redirigimos a la URL interna (/files o /private/files) para que Frappe lo sirva.
+    # 2) Permisos
+    # Si es privado _pero_ fue creado por Guest, dejamos pasar a cualquier
+    if file_doc.is_private and file_doc.owner == "Guest":
+        # saltamos la validación de permisos
+        pass
+    else:
+        # validación normal
+        if not file_doc.has_permission("read"):
+            frappe.throw(_("You do not have permission to access this file"), frappe.PermissionError)
+
+    # 3) Si es URL local, delegar al handler estándar
     local_url = file_doc.file_url or ""
     if local_url.startswith("/files") or local_url.startswith("/private/files"):
         frappe.local.response.update({
@@ -173,75 +190,78 @@ def download_file(key=None):
         })
         return
 
-    # 2) Read the object from S3 using S3Operations helper
+    # 4) Traer el objeto de S3
     s3op = S3Operations()
-    obj = s3op.read_file_from_s3(key)      # {'Body': StreamingBody, 'ContentType': 'application/pdf', ...}
+    obj   = s3op.read_file_from_s3(file_doc.content_hash)
     stream = obj["Body"]
 
-    # 3) Build the response and force inline display
+    # 5) Devolver inline/download
     frappe.local.response.update({
         "filecontent": stream.read(),
         "filename": file_doc.file_name,
         "type": "download",
-        # This causes Frappe to send:
-        #   Content-Disposition: inline; filename="your_file.pdf"
         "display_content_as": "inline"
     })
-    # Optional: ensure the correct Content-Type header (e.g. application/pdf)
     frappe.local.response["content_type"] = obj.get("ContentType")
+
+@frappe.whitelist()
+def retry_file_upload(docname, attempt=1, max_attempts=5, delay=3):
+    """
+    Reintenta la subida S3 de un File hasta que 'attached_to_name'
+    deje de empezar por 'new-'. 
+    """
+    file_doc = frappe.get_doc("File", docname)
+    parent = file_doc.attached_to_name or ""
+    if parent.startswith("new-") and attempt < max_attempts:
+        # re-enqueue con counter aumentado
+        frappe.enqueue(
+            method="frappe_s3_attachment.controller.retry_file_upload",
+            queue="long",
+            timeout=300,
+            docname=docname,
+            attempt=attempt + 1,
+            max_attempts=max_attempts,
+            delay=delay
+        )
+        time.sleep(delay)
+        return
+
+    # cuando ya no es provisional o se agotaron intentos, llamamos al upload original
+    file_upload_to_s3(file_doc, None)
 
 
 @frappe.whitelist(allow_guest=False)
 def file_upload_to_s3(doc, method):
     """
-    Hook: upload a File doctype attachment to S3.
-    Si es una corrección (amended_from), reubica el adjunto en la carpeta
-    correspondiente y reutiliza el objeto S3 sin volver a subirlo.
+    Hook: sube un File a S3, ya sea leyendo disco o memoria.
     """
+    # Ignorar imágenes…
+    _, ext = os.path.splitext(doc.file_name or "")
+    if ext.lower() in {'.png','.jpg','.jpeg','.gif','.bmp','.svg','.webp'}:
+        frappe.log_error(message=f"Skipping image upload to S3: {doc.file_name}",
+                         title="file_upload_to_s3")
+        return
+    if not frappe.db.exists("DocType", doc.attached_to_doctype):
+        return
     if getattr(doc, 'is_folder', False):
         return
     if doc.attached_to_doctype == "Prepared Report":
         return
-    # # ——— Detectamos corrección ———
-    # parent_doctype = doc.attached_to_doctype
-    # parent_name = doc.attached_to_name
-    # if parent_doctype and parent_name:
-    #     frappe.log_error(f"File Upload to S3: {parent_doctype} / {parent_name}", "File Upload to S3")
-    #     parent = frappe.get_doc(parent_doctype, parent_name)
-    #     if getattr(parent, "amended_from", None):
-    #         # 1) Buscamos el File original en el documento previo
-    #         frappe.log_error(parent.amended_from, "File Upload to S3")
-    #         orig = frappe.get_all("File",
-    #             filters={
-    #                 "attached_to_doctype": parent_doctype,
-    #                 "attached_to_name": parent.amended_from,
-    #                 "file_name": doc.file_name
-    #             },
-    #             fields=["file_url", "content_hash"],
-    #             limit=1
-    #         )
-    #         if orig:
-    #             orig = orig[0]
-    #             # 2) Creamos (si no existe) la carpeta Home/Doctype/<new_name>
-    #             from frappe_s3_attachment.methods import ensure_folder_hierarchy
-    #             target = ensure_folder_hierarchy(parent_doctype, parent_name)
-    #             # 3) Reparenting: actualizamos en base de datos
-    #             frappe.db.set_value("File", doc.name, {
-    #                 "file_url":     orig.file_url,
-    #                 "content_hash": orig.content_hash,
-    #                 "folder":       target.name,
-    #                 "old_parent":   target.name,
-    #                 "attached_to_doctype": parent_doctype,
-    #                 "attached_to_name":    parent_name
-    #             })
-    #             frappe.db.commit()
-    #             return
-    # # ——— Fin lógica corrección ———
+    # Si el padre aún es provisional, reprogramamos   
+    parent_name = getattr(doc, "attached_to_name", None) or ""
+    if parent_name.startswith("new-"):
+        frappe.enqueue(
+            method="frappe_s3_attachment.controller.retry_file_upload",
+            queue="long",
+            timeout=300,
+            docname=doc.name,
+            attempt=1
+        )
+        return
+    s3op = S3Operations()
+    site_path = get_site_path()
 
-    # A partir de aquí, tu “normal” a S3:
-    s3op     = S3Operations()
-    site_path= frappe.utils.get_site_path()
-
+    # Determinar local_path
     if doc.is_private and doc.file_url:
         local_path = os.path.join(site_path, doc.file_url.lstrip('/'))
     elif doc.file_url:
@@ -249,8 +269,7 @@ def file_upload_to_s3(doc, method):
     else:
         return
 
-
-    # Determinar contexto padre
+    # Determinar contexto padre (igual que antes)…
     if doc.attached_to_doctype == 'File' and doc.attached_to_name:
         fld = frappe.get_doc('File', doc.attached_to_name)
         if fld.is_folder:
@@ -265,50 +284,128 @@ def file_upload_to_s3(doc, method):
         parent_doctype = doc.attached_to_doctype or doc.doctype
         parent_name    = doc.attached_to_name  or doc.name
         folder_docname = doc.folder
-        # Ignorar carpeta “Attachments” por defecto
+        # Ignorar “Attachments”…
         if folder_docname:
             f = frappe.get_doc('File', folder_docname)
             if f.is_folder and f.file_name == 'Attachments':
                 folder_docname = None
 
-    # Subida a S3
-    key, fname = s3op.upload_files_to_s3_with_key(
-        local_path,
-        doc.file_name,
-        doc.is_private,
-        parent_doctype,
-        parent_name,
-        folder_docname=folder_docname
-    )
+    # Generar key
+    key = s3op.key_generator(doc.file_name, parent_doctype, parent_name, folder_docname)
+
+    # MIME y subida
+    extra_args = {}
+    # 1) Rayar mime-type
+    if os.path.exists(local_path):
+        # Si existe local, lo usamos
+        mime_type = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
+        extra_args['ContentType'] = mime_type
+        if not doc.is_private:
+            extra_args['ACL'] = 'public-read'
+
+        try:
+            s3op.S3_CLIENT.upload_file(local_path, s3op.BUCKET, key, ExtraArgs=extra_args)
+        except ClientError:
+            frappe.throw(_('File Upload Failed. Please try again.'))
+
+    else:
+        # Si no existe local, tiramos de memoria
+        try:
+            data = doc.get_content()
+        except Exception:
+            data = getattr(doc, '_content', None)
+
+        if not data:
+            frappe.log_error(
+                message=f"No data to upload for {doc.name}, path={local_path}",
+                title="file_upload_to_s3"
+            )
+            return
+
+        mime_type = mimetypes.guess_type(doc.file_name)[0] or 'application/octet-stream'
+        extra_args['ContentType'] = mime_type
+        if not doc.is_private:
+            extra_args['ACL'] = 'public-read'
+
+        buffer = io.BytesIO(data)
+        try:
+            s3op.S3_CLIENT.upload_fileobj(buffer, s3op.BUCKET, key, ExtraArgs=extra_args)
+        except ClientError:
+            frappe.throw(_('File Upload Failed. Please try again.'))
 
     # Construir URL
     if not doc.is_private:
-        # virtual-host style
         endpoint = s3op.S3_CLIENT.meta.endpoint_url.rstrip('/')
-        # quitamos el esquema, nos quedamos con "s3.de.io.cloud.ovh.net"
         host = endpoint.split('://', 1)[1]
         url = f"https://{s3op.BUCKET}.{host}/{key}"
     else:
-        # privado, seguimos usando nuestro endpoint firmado
         url = get_url(f"/api/method/frappe_s3_attachment.controller.download_file?key={key}")
 
+    # Actualizar File
     frappe.db.sql("""
         UPDATE `tabFile`
         SET file_url=%s, folder=%s, old_parent=%s, content_hash=%s
         WHERE name=%s
     """, (url, doc.folder, doc.folder, key, doc.name))
     frappe.db.commit()
-
-    # Limpiar copia local y recargar
-    try:
-        os.remove(local_path)
-    except OSError:
-        pass
+    if getattr(doc, "attached_to_field", None):
+        frappe.db.set_value(
+            doc.attached_to_doctype,
+            doc.attached_to_name,
+            doc.attached_to_field,
+            url
+        )
+    # Encolar borrado local
+    frappe.enqueue(
+        method=_delete_later,
+        queue='long',
+        path=local_path,
+        s3_key=key,
+        max_retries=5,
+        retry_delay=2
+    )
 
     doc.reload()
 
+def _delete_later(path, s3_key, max_retries=5, retry_delay=2):
+    """
+    Espera a que S3 confirme la existencia de `s3_key` antes de borrar `path`.
+    Reintenta hasta `max_retries` veces, con `retry_delay` segundos entre cada intento.
+    """
+    s3op = S3Operations()
+    for attempt in range(1, max_retries + 1):
+        try:
+            # head_object lanza 404 si no existe
+            s3op.S3_CLIENT.head_object(Bucket=s3op.BUCKET, Key=s3_key)
+            # Si llegamos aquí, S3 ya tiene el objeto → podemos borrar local
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        except ClientError as e:
+            code = e.response.get('Error', {}).get('Code', '')
+            # Si no existe aún, esperamos un poco y reintentamos
+            if code in ('404', 'NoSuchKey'):
+                time.sleep(retry_delay)
+                continue
+            # Otros errores de S3: los registramos y abandonamos
+            frappe.log_error(
+                message=f"S3 head_object falló para key={s3_key}: {e}",
+                title="delete_local_temp_file"
+            )
+            return
+        except OSError as oe:
+            # Error de fichero local (permiso, bloqueo…), registramos pero seguimos reintentando
+            frappe.log_error(
+                message=f"Intento {attempt}/{max_retries} borrando {path} fallido: {oe}",
+                title="delete_local_temp_file"
+            )
+            time.sleep(retry_delay)
 
-
+    # Si agotamos reintentos:
+    frappe.log_error(
+        message=f"No se pudo borrar {path} tras {max_retries} intentos (esperando existencia en S3)",
+        title="delete_local_temp_file"
+    )
 
 @frappe.whitelist()
 def generate_file(key=None, file_name=None):
