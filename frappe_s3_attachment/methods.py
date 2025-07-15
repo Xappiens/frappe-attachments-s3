@@ -54,7 +54,9 @@ def ensure_file_folder(doc, method):
     docname = getattr(doc, "attached_to_name", None)
     if not doctype or not docname:
         return
-
+    if doctype == "Bank Statement Import" or doctype == "Prepared Report":
+        # Si es un Bank Statement Import o Prepared Report, no hacemos nada
+        return
     # (3) Creamos u obtenemos la carpeta intermedia "Home/Doctype/docname"
     parent_folder = ensure_folder_hierarchy(doctype, docname, subfolders=[])
     parent_id = parent_folder.name  # ID de "Home/Doctype/docname"

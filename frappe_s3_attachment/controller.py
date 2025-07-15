@@ -245,7 +245,7 @@ def file_upload_to_s3(doc, method):
         return
     if getattr(doc, 'is_folder', False):
         return
-    if doc.attached_to_doctype == "Prepared Report":
+    if doc.attached_to_doctype == "Prepared Report" or doc.attached_to_doctype == "Bank Statement Import":
         return
     # Si el padre aún es provisional, reprogramamos   
     parent_name = getattr(doc, "attached_to_name", None) or ""
