@@ -353,7 +353,8 @@ def file_upload_to_s3(doc, method):
             doc.attached_to_doctype,
             doc.attached_to_name,
             doc.attached_to_field,
-            url
+            url,
+            update_modified=False
         )
     # Encolar borrado local
     frappe.enqueue(
