@@ -282,6 +282,10 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
     }
 
 
+    /*
+     Este método es el original que gestionaba el upload de archivos y carpetas. 
+     Se ha comentado para evitar conflictos con la estructura de carpetas de custom_education.
+     
     prompt_upload(parent_folder_id) {
         //console.log("PARENT FOLDER ID: ", parent_folder_id);
         const folder = parent_folder_id || "Home";
@@ -295,6 +299,79 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 });
             }
         });
+    } */
+
+    prompt_upload(parent_folder_id) {
+        const me = this;
+
+        // Crear input file manualmente
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = false;
+        input.accept = '*/*';
+
+        input.onchange = function (e) {
+            const file = e.target.files[0];
+            console.log(file);
+            if (!file) return;
+
+            // Determinar el nombre de la carpeta basado en parent_folder_id
+            let folder_name = null;
+            if (parent_folder_id && parent_folder_id !== "Home") {
+                // Obtener el nombre de la carpeta desde la base de datos
+                frappe.call({
+                    method: 'frappe.client.get_value',
+                    args: {
+                        doctype: 'File',
+                        name: parent_folder_id,
+                        fieldname: 'file_name'
+                    },
+                    callback: function (r) {
+                        if (r.message && r.message.file_name) {
+                            folder_name = r.message.file_name;
+                        }
+
+                        // Usar upload_file_to_folder que respeta las carpetas
+                        console.log(file);
+                        frappe.call({
+                            method: 'frappe_s3_attachment.methods.upload_file_to_folder',
+                            args: {
+                                doctype: me.frm.doctype,
+                                docname: me.frm.docname,
+                                subfolders: folder_name ? [folder_name] : null,
+                                is_private: 0
+                            },
+                            files: {
+                                file: file
+                            },
+                            callback: function (r) {
+                                if (r.exc) {
+                                    frappe.msgprint('Error al subir archivo: ' + r.exc);
+                                } else {
+                                    me.frm.reload_doc().then(() => {
+                                        me.refresh();
+                                    });
+                                }
+                            }
+                        });
+                    }
+                });
+            } else {
+                // Si no hay carpeta específica, usar el método estándar
+                new frappe.ui.FileUploader({
+                    doctype: me.frm.doctype,
+                    docname: me.frm.docname,
+                    folder: "Home",
+                    on_success: () => {
+                        me.frm.reload_doc().then(() => {
+                            me.refresh();
+                        });
+                    }
+                });
+            }
+        };
+
+        input.click();
     }
 
 
