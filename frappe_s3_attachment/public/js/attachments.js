@@ -312,11 +312,67 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
 
         input.onchange = function (e) {
             const file = e.target.files[0];
-            console.log(file);
             if (!file) return;
 
+            // Función para subir el archivo usando XHR
+            const uploadFile = function(folder_name) {
+                // Crear FormData para enviar el archivo correctamente
+                const formData = new FormData();
+                formData.append('file', file, file.name);
+                formData.append('doctype', me.frm.doctype);
+                formData.append('docname', me.frm.docname);
+                formData.append('subfolders', folder_name || '');
+                formData.append('is_private', '0');
+                
+                // Mostrar indicador de carga
+                frappe.show_progress('Subiendo archivo...', 0, 100, 'Por favor espere');
+                
+                // Usar XMLHttpRequest para enviar multipart/form-data
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/method/frappe_s3_attachment.methods.upload_file_to_folder', true);
+                xhr.setRequestHeader('X-Frappe-CSRF-Token', frappe.csrf_token);
+                
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        frappe.show_progress('Subiendo archivo...', percent, 100, 'Por favor espere');
+                    }
+                };
+                
+                xhr.onload = function() {
+                    frappe.hide_progress();
+                    if (xhr.status === 200) {
+                        try {
+                            const response = JSON.parse(xhr.responseText);
+                            if (response.exc) {
+                                frappe.msgprint(__('Error al subir archivo'));
+                            } else {
+                                frappe.show_alert({
+                                    message: __('Archivo subido correctamente'),
+                                    indicator: 'green'
+                                });
+                                // Recargar el documento y refrescar el árbol
+                                me.frm.reload_doc().then(() => {
+                                    me.refresh();
+                                });
+                            }
+                        } catch (parseError) {
+                            frappe.msgprint(__('Error al procesar la respuesta'));
+                        }
+                    } else {
+                        frappe.msgprint(__('Error al subir archivo'));
+                    }
+                };
+                
+                xhr.onerror = function() {
+                    frappe.hide_progress();
+                    frappe.msgprint(__('Error de conexión al subir archivo'));
+                };
+                
+                xhr.send(formData);
+            };
+
             // Determinar el nombre de la carpeta basado en parent_folder_id
-            let folder_name = null;
             if (parent_folder_id && parent_folder_id !== "Home") {
                 // Obtener el nombre de la carpeta desde la base de datos
                 frappe.call({
@@ -327,47 +383,13 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                         fieldname: 'file_name'
                     },
                     callback: function (r) {
-                        if (r.message && r.message.file_name) {
-                            folder_name = r.message.file_name;
-                        }
-
-                        // Usar upload_file_to_folder que respeta las carpetas
-                        console.log(file);
-                        frappe.call({
-                            method: 'frappe_s3_attachment.methods.upload_file_to_folder',
-                            args: {
-                                doctype: me.frm.doctype,
-                                docname: me.frm.docname,
-                                subfolders: folder_name ? [folder_name] : null,
-                                is_private: 0
-                            },
-                            files: {
-                                file: file
-                            },
-                            callback: function (r) {
-                                if (r.exc) {
-                                    frappe.msgprint('Error al subir archivo: ' + r.exc);
-                                } else {
-                                    me.frm.reload_doc().then(() => {
-                                        me.refresh();
-                                    });
-                                }
-                            }
-                        });
+                        const folder_name = (r.message && r.message.file_name) ? r.message.file_name : null;
+                        uploadFile(folder_name);
                     }
                 });
             } else {
-                // Si no hay carpeta específica, usar el método estándar
-                new frappe.ui.FileUploader({
-                    doctype: me.frm.doctype,
-                    docname: me.frm.docname,
-                    folder: "Home",
-                    on_success: () => {
-                        me.frm.reload_doc().then(() => {
-                            me.refresh();
-                        });
-                    }
-                });
+                // Si no hay carpeta específica, subir a la raíz del documento
+                uploadFile(null);
             }
         };
 
