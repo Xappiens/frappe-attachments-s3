@@ -32,6 +32,31 @@ def sanitize_folder_name(text):
 
     return text
 
+
+# Extensiones de archivo comunes que NO deberían ser nombres de carpeta
+FILE_EXTENSIONS = {
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg',
+    '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv',
+    '.zip', '.rar', '.7z', '.tar', '.gz',
+    '.txt', '.csv', '.json', '.xml', '.html', '.htm',
+    '.odt', '.ods', '.odp'
+}
+
+
+def is_valid_folder_name(name):
+    """
+    Verifica que el nombre no parezca un archivo (no tenga extensión de archivo común).
+    Devuelve True si es un nombre válido para carpeta, False si parece un archivo.
+    """
+    if not name:
+        return False
+    name_lower = name.lower()
+    for ext in FILE_EXTENSIONS:
+        if name_lower.endswith(ext):
+            return False
+    return True
+
 @frappe.whitelist()
 def ensure_file_folder(doc, method):
     """
@@ -104,6 +129,18 @@ def create_folder_if_not_exists(folder_name, parent_folder=None,
                                 attached_to_doctype=None, attached_to_name=None):
     parent = parent_folder or "Home"
     sanitanized_name = sanitize_folder_name(folder_name)
+    
+    # Validar que el nombre no parezca un archivo (evita crear carpetas como "documento.pdf")
+    if not is_valid_folder_name(sanitanized_name):
+        frappe.log_error(
+            f"Intento de crear carpeta con nombre de archivo: {folder_name} -> {sanitanized_name}",
+            "create_folder_if_not_exists - Nombre inválido"
+        )
+        frappe.throw(
+            _("No se puede crear una carpeta con nombre de archivo: {0}").format(folder_name),
+            frappe.ValidationError
+        )
+    
     existing = frappe.get_all('File',
         filters={'file_name': sanitanized_name, 'is_folder': 1, 'folder': parent},
         fields=['name'], limit=1)
@@ -156,21 +193,33 @@ def get_doc_folder(doctype, docname):
     return folder.name
 
 @frappe.whitelist(allow_guest=False)
-def upload_file_to_folder(doctype, docname, subfolders=None, is_private=0):
+def upload_file_to_folder(doctype, docname, subfolders=None, is_private=0, target_folder=None):
     """
     Endpoint para subir un archivo desde el frontend.
     - Recibe formData con 'file' (campo file).
-    - Crea la jerarquía de carpetas: Doctype → docname → subfolders...
+    - Si target_folder está definido, usa esa carpeta directamente (por su ID/name).
+    - Si no, crea la jerarquía de carpetas: Doctype → docname → subfolders...
     - Guarda con save_file() y dispara tu hook S3.
     Devuelve el dict del File creado.
     """
-    # subfolders puede llegar como JSON-string o lista
-    if isinstance(subfolders, str):
-        # formato "a,b,c"
-        subfolders = [s.strip() for s in subfolders.split(',') if s.strip()]
+    # Si se especifica target_folder, usarlo directamente
+    if target_folder and target_folder not in ('', 'null', 'None', 'Home'):
+        # Verificar que la carpeta existe y es realmente una carpeta
+        try:
+            folder_doc = frappe.get_doc('File', target_folder)
+            if not folder_doc.is_folder:
+                frappe.throw(_('El destino especificado no es una carpeta válida: {0}').format(target_folder))
+            folder = folder_doc
+        except frappe.DoesNotExistError:
+            frappe.throw(_('La carpeta de destino no existe: {0}').format(target_folder))
+    else:
+        # subfolders puede llegar como JSON-string o lista
+        if isinstance(subfolders, str):
+            # formato "a,b,c"
+            subfolders = [s.strip() for s in subfolders.split(',') if s.strip()]
 
-    # 1) Asegura la carpeta destino
-    folder = ensure_folder_hierarchy(doctype, docname, subfolders)
+        # 1) Asegura la carpeta destino
+        folder = ensure_folder_hierarchy(doctype, docname, subfolders)
 
     # 2) Lee el fichero del request
     uploaded = frappe.local.request.files.get('file')

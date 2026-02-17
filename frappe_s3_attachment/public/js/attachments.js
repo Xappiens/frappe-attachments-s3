@@ -315,13 +315,15 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
             if (!file) return;
 
             // Función para subir el archivo usando XHR
-            const uploadFile = function(folder_name) {
+            // target_folder_id: ID completo de la carpeta destino (ej: "Home/Course/AF-.../subcarpeta")
+            const uploadFile = function(target_folder_id) {
                 // Crear FormData para enviar el archivo correctamente
                 const formData = new FormData();
                 formData.append('file', file, file.name);
                 formData.append('doctype', me.frm.doctype);
                 formData.append('docname', me.frm.docname);
-                formData.append('subfolders', folder_name || '');
+                // Usar target_folder para especificar la carpeta exacta por su ID
+                formData.append('target_folder', target_folder_id || '');
                 formData.append('is_private', '0');
                 
                 // Mostrar indicador de carga
@@ -372,19 +374,32 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 xhr.send(formData);
             };
 
-            // Determinar el nombre de la carpeta basado en parent_folder_id
+            // Determinar la carpeta destino basado en parent_folder_id
             if (parent_folder_id && parent_folder_id !== "Home") {
-                // Obtener el nombre de la carpeta desde la base de datos
+                // Verificar que la carpeta existe y es realmente una carpeta
                 frappe.call({
-                    method: 'frappe.client.get_value',
+                    method: 'frappe.client.get',
                     args: {
                         doctype: 'File',
-                        name: parent_folder_id,
-                        fieldname: 'file_name'
+                        name: parent_folder_id
                     },
                     callback: function (r) {
-                        const folder_name = (r.message && r.message.file_name) ? r.message.file_name : null;
-                        uploadFile(folder_name);
+                        const doc = r.message;
+                        // is_folder puede venir como 1, "1", o true
+                        const isFolder = doc && (doc.is_folder === 1 || doc.is_folder === "1" || doc.is_folder === true);
+                        if (isFolder) {
+                            // Pasar el ID completo de la carpeta (doc.name) como target_folder
+                            console.log('Subiendo a carpeta:', doc.name);
+                            uploadFile(doc.name);
+                        } else {
+                            // Si no es carpeta, subir a la raíz del documento
+                            console.warn('parent_folder_id no es una carpeta válida:', parent_folder_id);
+                            uploadFile(null);
+                        }
+                    },
+                    error: function(err) {
+                        console.error('Error al obtener carpeta:', parent_folder_id, err);
+                        uploadFile(null);
                     }
                 });
             } else {
