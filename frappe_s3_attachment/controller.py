@@ -14,7 +14,8 @@ from frappe.utils import get_url
 import boto3
 import magic
 import frappe
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.config import Config
 from frappe import _
 from frappe.utils import get_url, get_site_path
 import mimetypes
@@ -138,11 +139,18 @@ class S3Operations(object):
 
     def delete_from_s3(self, key):
         """Delete an object from S3 if delete_file_from_cloud is enabled."""
-        if self.cfg.delete_file_from_cloud:
-            try:
-                self.S3_CLIENT.delete_object(Bucket=self.BUCKET, Key=key)
-            except ClientError:
-                frappe.throw(_('Access denied: Could not delete file'))
+        if not self.cfg.delete_file_from_cloud:
+            return
+        try:
+            self.S3_CLIENT.delete_object(Bucket=self.BUCKET, Key=key)
+        except ClientError:
+            frappe.throw(_('Access denied: Could not delete file'))
+        except EndpointConnectionError as e:
+            frappe.log_error(
+                message=f"S3 endpoint unreachable: {e}\nCheck endpoint_url (e.g. OVH: https://s3.gra.io.cloud.ovh.net for GRA).",
+                title="S3 delete_from_s3"
+            )
+            # No re-raise: allow local file delete to complete; object may be removed later
 
     def read_file_from_s3(self, key):
         """Download/get an object from S3."""
@@ -230,35 +238,24 @@ def retry_file_upload(docname, attempt=1, max_attempts=5, delay=3):
     file_upload_to_s3(file_doc, None)
 
 
-def _should_skip_s3_upload(doc):
-    """
-    Devuelve True si este File NO debe subirse a S3.
-    - Carpetas y DocTypes en ignore_s3_upload_for_doctype (common_site_config).
-    - file_url ya remota (http/https): no hay fichero local que subir.
-    """
-    if getattr(doc, "is_folder", False):
-        return True
-    file_url = (getattr(doc, "file_url", None) or "").strip()
-    if file_url.startswith("http://") or file_url.startswith("https://"):
-        return True  # ya es URL externa/S3, no re-subir
-    doctype = getattr(doc, "attached_to_doctype", None)
-    if not doctype:
-        return False  # archivos sin documento asociado sí se suben a S3
-    if not frappe.db.exists("DocType", doctype):
-        return True
-    ignore_list = frappe.conf.get("ignore_s3_upload_for_doctype") or []
-    return doctype in ignore_list
-
-
 @frappe.whitelist(allow_guest=False)
 def file_upload_to_s3(doc, method):
     """
-    Hook: sube un File a S3 (todos los tipos, incluidos imágenes), salvo los
-    DocTypes listados en ignore_s3_upload_for_doctype en common_site_config.
+    Hook: sube un File a S3, ya sea leyendo disco o memoria.
     """
-    if _should_skip_s3_upload(doc):
+    # Ignorar carpetas
+    if getattr(doc, 'is_folder', False):
         return
-    # Si el padre aún es provisional, reprogramamos   
+    
+    # Ignorar ciertos doctypes que no deben ir a S3
+    if doc.attached_to_doctype in ("Prepared Report", "Bank Statement Import"):
+        return
+    
+    # Si attached_to_doctype está definido pero el DocType no existe, ignorar
+    if doc.attached_to_doctype and not frappe.db.exists("DocType", doc.attached_to_doctype):
+        return
+    
+    # Si el padre aún es provisional (new-xxx), reprogramamos
     parent_name = getattr(doc, "attached_to_name", None) or ""
     if parent_name.startswith("new-"):
         frappe.enqueue(
@@ -269,6 +266,7 @@ def file_upload_to_s3(doc, method):
             attempt=1
         )
         return
+    
     s3op = S3Operations()
     site_path = get_site_path()
 
@@ -572,5 +570,24 @@ def relocate_amended_file(doc, method):
 def ping():
     """Healthcheck."""
     return 'pong'
+
+
+@frappe.whitelist()
+def test_s3_connection():
+    """
+    Test S3 connectivity and credentials. Returns dict with success, message, endpoint.
+    Use from Desk or: bench execute frappe_s3_attachment.controller.test_s3_connection
+    """
+    try:
+        s3op = S3Operations()
+        endpoint = s3op.S3_CLIENT.meta.endpoint_url
+        s3op.S3_CLIENT.head_bucket(Bucket=s3op.BUCKET)
+        return {"success": True, "message": "OK", "endpoint": endpoint, "bucket": s3op.BUCKET}
+    except EndpointConnectionError as e:
+        return {"success": False, "message": str(e), "hint": "Revisa endpoint_url y region_name en S3 File Attachment."}
+    except ClientError as e:
+        return {"success": False, "message": e.response.get("Error", {}).get("Message", str(e)), "code": e.response.get("Error", {}).get("Code")}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
