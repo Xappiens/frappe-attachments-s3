@@ -230,22 +230,33 @@ def retry_file_upload(docname, attempt=1, max_attempts=5, delay=3):
     file_upload_to_s3(file_doc, None)
 
 
+def _should_skip_s3_upload(doc):
+    """
+    Devuelve True si este File NO debe subirse a S3.
+    - Carpetas y DocTypes en ignore_s3_upload_for_doctype (common_site_config).
+    - file_url ya remota (http/https): no hay fichero local que subir.
+    """
+    if getattr(doc, "is_folder", False):
+        return True
+    file_url = (getattr(doc, "file_url", None) or "").strip()
+    if file_url.startswith("http://") or file_url.startswith("https://"):
+        return True  # ya es URL externa/S3, no re-subir
+    doctype = getattr(doc, "attached_to_doctype", None)
+    if not doctype:
+        return False  # archivos sin documento asociado sí se suben a S3
+    if not frappe.db.exists("DocType", doctype):
+        return True
+    ignore_list = frappe.conf.get("ignore_s3_upload_for_doctype") or []
+    return doctype in ignore_list
+
+
 @frappe.whitelist(allow_guest=False)
 def file_upload_to_s3(doc, method):
     """
-    Hook: sube un File a S3, ya sea leyendo disco o memoria.
+    Hook: sube un File a S3 (todos los tipos, incluidos imágenes), salvo los
+    DocTypes listados en ignore_s3_upload_for_doctype en common_site_config.
     """
-    # Ignorar imágenes…
-    _, ext = os.path.splitext(doc.file_name or "")
-    if ext.lower() in {'.png','.jpg','.jpeg','.gif','.bmp','.svg','.webp'}:
-        frappe.log_error(message=f"Skipping image upload to S3: {doc.file_name}",
-                         title="file_upload_to_s3")
-        return
-    if not frappe.db.exists("DocType", doc.attached_to_doctype):
-        return
-    if getattr(doc, 'is_folder', False):
-        return
-    if doc.attached_to_doctype == "Prepared Report" or doc.attached_to_doctype == "Bank Statement Import":
+    if _should_skip_s3_upload(doc):
         return
     # Si el padre aún es provisional, reprogramamos   
     parent_name = getattr(doc, "attached_to_name", None) or ""
