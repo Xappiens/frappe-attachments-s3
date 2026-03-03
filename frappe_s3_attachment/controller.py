@@ -147,10 +147,9 @@ class S3Operations(object):
             frappe.throw(_('Access denied: Could not delete file'))
         except EndpointConnectionError as e:
             frappe.log_error(
-                message=f"S3 endpoint unreachable: {e}\nCheck endpoint_url (e.g. OVH: https://s3.gra.io.cloud.ovh.net for GRA).",
+                message=f"S3 endpoint unreachable: {e}. Revisa endpoint_url y región en S3 File Attachment.",
                 title="S3 delete_from_s3"
             )
-            # No re-raise: allow local file delete to complete; object may be removed later
 
     def read_file_from_s3(self, key):
         """Download/get an object from S3."""

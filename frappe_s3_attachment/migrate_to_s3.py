@@ -1,6 +1,6 @@
 """
 Script de migración masiva de archivos locales a S3.
-Ejecutar con: bench --site erp.grupoatu.com execute frappe_s3_attachment.migrate_to_s3.run
+Ejecutar con: bench --site <tu_sitio> execute frappe_s3_attachment.migrate_to_s3.run
 
 Opciones:
 - run(batch_size=100, max_files=None, delete_local=False)
