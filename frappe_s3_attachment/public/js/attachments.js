@@ -1,5 +1,27 @@
 frappe.provide('frappe.ui.form');
 
+// Ocultar el toggle de "Private" en el FileUploader modal
+// Los archivos siempre se suben como privados por seguridad
+// Si el usuario quiere hacer un archivo público, debe ir a File y marcarlo expresamente
+(function() {
+    const style = document.createElement('style');
+    style.textContent = `
+        /* Ocultar checkbox "Private" en el modal de subida de archivos */
+        .file-uploader .file-info .frappe-checkbox:last-child {
+            display: none !important;
+        }
+        /* Ocultar el botón "Set all public/private" del diálogo de subida */
+        .modal-dialog .btn-modal-secondary {
+            display: none !important;
+        }
+        /* Ocultar el mensaje "Click on the lock icon to toggle public/private" */
+        .file-uploader .upload-action .text-muted.text-medium {
+            display: none !important;
+        }
+    `;
+    document.head.appendChild(style);
+})();
+
 const OriginalAttachments = frappe.ui.form.Attachments;
 
 frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments {
@@ -324,7 +346,7 @@ frappe.ui.form.Attachments = class CustomAttachments extends OriginalAttachments
                 formData.append('docname', me.frm.docname);
                 // Usar target_folder para especificar la carpeta exacta por su ID
                 formData.append('target_folder', target_folder_id || '');
-                formData.append('is_private', '0');
+                formData.append('is_private', '1');
                 
                 // Mostrar indicador de carga
                 frappe.show_progress('Subiendo archivo...', 0, 100, 'Por favor espere');

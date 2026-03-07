@@ -330,12 +330,18 @@ def file_upload_to_s3(doc, method):
 
     # MIME y subida
     extra_args = {}
+    
+    # Determinar si el archivo debe ser público en internet
+    # SOLO es público si is_private=0 (marcado expresamente por el usuario desde el DocType File)
+    # Por defecto todos los archivos suben como privados desde el modal de subida
+    make_public = not doc.is_private
+    
     # 1) Rayar mime-type
     if os.path.exists(local_path):
         # Si existe local, lo usamos
         mime_type = mimetypes.guess_type(local_path)[0] or 'application/octet-stream'
         extra_args['ContentType'] = mime_type
-        if not doc.is_private:
+        if make_public:
             extra_args['ACL'] = 'public-read'
 
         try:
@@ -359,7 +365,7 @@ def file_upload_to_s3(doc, method):
 
         mime_type = mimetypes.guess_type(doc.file_name)[0] or 'application/octet-stream'
         extra_args['ContentType'] = mime_type
-        if not doc.is_private:
+        if make_public:
             extra_args['ACL'] = 'public-read'
 
         buffer = io.BytesIO(data)
@@ -369,7 +375,9 @@ def file_upload_to_s3(doc, method):
             frappe.throw(_('File Upload Failed. Please try again.'))
 
     # Construir URL
-    if not doc.is_private:
+    # Solo usamos URL directa de S3 si make_public=True (is_private=0)
+    # En cualquier otro caso, usamos la API de Frappe que genera presigned URLs
+    if make_public:
         endpoint = s3op.S3_CLIENT.meta.endpoint_url.rstrip('/')
         host = endpoint.split('://', 1)[1]
         url = f"https://{s3op.BUCKET}.{host}/{key}"
