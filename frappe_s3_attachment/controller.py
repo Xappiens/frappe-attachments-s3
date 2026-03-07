@@ -7,18 +7,17 @@ import re
 import io
 import random
 import string
-import time
 import datetime
-from frappe.utils import get_url
+from datetime import timedelta
 
 import boto3
 import magic
+import mimetypes
 import frappe
 from botocore.exceptions import ClientError, EndpointConnectionError
 from botocore.config import Config
 from frappe import _
-from frappe.utils import get_url, get_site_path
-import mimetypes
+from frappe.utils import get_url, get_site_path, get_datetime
 from frappe.exceptions import DoesNotExistError, PermissionError
 
 
@@ -211,29 +210,54 @@ def download_file(key=None, fid=None):
     })
     frappe.local.response["content_type"] = obj.get("ContentType")
 
+# Días tras los cuales un File con padre "new-xxx" se considera huérfano (no reencolar)
+S3_RETRY_STALE_DAYS = 2
+
+
+def _is_stale_provisional_file(file_doc):
+    """
+    Devuelve True si el File lleva demasiado tiempo con attached_to_name tipo 'new-xxx'.
+    Estos archivos son adjuntos a borradores que nunca se guardaron.
+    """
+    attached_to = file_doc.attached_to_name or ""
+    if not attached_to.startswith("new-"):
+        return False
+    creation = get_datetime(file_doc.creation)
+    threshold = get_datetime() - timedelta(days=S3_RETRY_STALE_DAYS)
+    return creation < threshold
+
+
 @frappe.whitelist()
-def retry_file_upload(docname, attempt=1, max_attempts=5, delay=3):
+def retry_file_upload(docname, attempt=1, max_attempts=5, **kwargs):
     """
     Reintenta la subida S3 de un File hasta que 'attached_to_name'
-    deje de empezar por 'new-'. 
+    deje de empezar por 'new-'. No reencola si el File es antiguo (adjunto huérfano).
+
+    **kwargs absorbe parámetros obsoletos (ej. 'delay') de jobs ya encolados.
     """
-    file_doc = frappe.get_doc("File", docname)
+    try:
+        file_doc = frappe.get_doc("File", docname)
+    except DoesNotExistError:
+        return
+
     parent = file_doc.attached_to_name or ""
+
     if parent.startswith("new-") and attempt < max_attempts:
-        # re-enqueue con counter aumentado
+        if _is_stale_provisional_file(file_doc):
+            file_upload_to_s3(file_doc, None)
+            return
+
         frappe.enqueue(
             method="frappe_s3_attachment.controller.retry_file_upload",
             queue="long",
             timeout=300,
+            enqueue_after_commit=True,
             docname=docname,
             attempt=attempt + 1,
             max_attempts=max_attempts,
-            delay=delay
         )
-        time.sleep(delay)
         return
 
-    # cuando ya no es provisional o se agotaron intentos, llamamos al upload original
     file_upload_to_s3(file_doc, None)
 
 
@@ -254,17 +278,20 @@ def file_upload_to_s3(doc, method):
     if doc.attached_to_doctype and not frappe.db.exists("DocType", doc.attached_to_doctype):
         return
     
-    # Si el padre aún es provisional (new-xxx), reprogramamos
+    # Si el padre aún es provisional (new-xxx), reprogramamos solo si el File es reciente
     parent_name = getattr(doc, "attached_to_name", None) or ""
     if parent_name.startswith("new-"):
-        frappe.enqueue(
-            method="frappe_s3_attachment.controller.retry_file_upload",
-            queue="long",
-            timeout=300,
-            docname=doc.name,
-            attempt=1
-        )
-        return
+        if not _is_stale_provisional_file(doc):
+            frappe.enqueue(
+                method="frappe_s3_attachment.controller.retry_file_upload",
+                queue="long",
+                timeout=300,
+                enqueue_after_commit=True,
+                docname=doc.name,
+                attempt=1
+            )
+            return
+        # Adjunto huérfano antiguo: continuar e intentar subir una vez sin reencolar
     
     s3op = S3Operations()
     site_path = get_site_path()
